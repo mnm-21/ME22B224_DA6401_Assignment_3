@@ -1,6 +1,7 @@
 import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import LRScheduler
+from typing import List
 
 
 class NoamScheduler(LRScheduler):
@@ -9,23 +10,29 @@ class NoamScheduler(LRScheduler):
     Includes a linear warmup followed by an inverse square root decay.
     """
 
-    def __init__(self, optimizer, d_model, warmup_steps, last_epoch=-1):
+    def __init__(
+        self,
+        optimizer: optim.Optimizer,
+        d_model: int,
+        warmup_steps: int,
+        last_epoch: int = -1,
+    ):
         self.d_model = d_model
         self.warmup_steps = warmup_steps
         super().__init__(optimizer, last_epoch)
 
-    def _get_lr_scale(self):
+    def _get_lr_scale(self) -> float:
         step = self.last_epoch + 1
         return self.d_model ** (-0.5) * min(
             step ** (-0.5), step * self.warmup_steps ** (-1.5)
         )
 
-    def get_lr(self):
+    def get_lr(self) -> List[float]:
         scale = self._get_lr_scale()
         return [base_lr * scale for base_lr in self.base_lrs]
 
 
-def get_lr_history(d_model, warmup_steps, total_steps):
+def get_lr_history(d_model: int, warmup_steps: int, total_steps: int) -> List[float]:
     """Simulates the LR schedule for plotting/verification."""
     dummy_model = torch.nn.Linear(1, 1)
     optimizer = optim.Adam(dummy_model.parameters(), lr=1.0)

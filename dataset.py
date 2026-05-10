@@ -3,15 +3,21 @@ from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from datasets import load_dataset
 import spacy
+from typing import Dict, List, Tuple, Optional, Any
 
 PAD_IDX = 1
-SPECIAL_TOKENS = {"<unk>": 0, "<pad>": 1, "<sos>": 2, "<eos>": 3}
+SPECIAL_TOKENS: Dict[str, int] = {"<unk>": 0, "<pad>": 1, "<sos>": 2, "<eos>": 3}
 
 
 class Multi30kDataset(Dataset):
     """Loads and tokenizes the Multi30k German-English dataset."""
 
-    def __init__(self, split="train", src_vocab=None, tgt_vocab=None):
+    def __init__(
+        self,
+        split: str = "train",
+        src_vocab: Optional[Dict[str, int]] = None,
+        tgt_vocab: Optional[Dict[str, int]] = None,
+    ):
         self.split = split
         ds = load_dataset("bentrevett/multi30k")
         self.data = ds[split]
@@ -26,10 +32,10 @@ class Multi30kDataset(Dataset):
 
         self.processed = self.process_data()
 
-    def tokenize(self, text, tokenizer):
+    def tokenize(self, text: str, tokenizer: Any) -> List[str]:
         return [tok.text.lower() for tok in tokenizer(text)]
 
-    def build_vocab(self):
+    def build_vocab(self) -> Tuple[Dict[str, int], Dict[str, int]]:
         """Creates token-to-index mappings for both languages."""
         src_vocab, tgt_vocab = dict(SPECIAL_TOKENS), dict(SPECIAL_TOKENS)
         for example in self.data:
@@ -41,7 +47,7 @@ class Multi30kDataset(Dataset):
                     tgt_vocab[tok] = len(tgt_vocab)
         return src_vocab, tgt_vocab
 
-    def process_data(self):
+    def process_data(self) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """Converts raw text sentences into integer tensors."""
         processed = []
         sos, eos, unk = (
@@ -74,14 +80,16 @@ class Multi30kDataset(Dataset):
             )
         return processed
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.processed)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.processed[idx]
 
 
-def collate_fn(batch):
+def collate_fn(
+    batch: List[Tuple[torch.Tensor, torch.Tensor]],
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """Pads sentences to the same length for batch processing."""
     src_batch, tgt_batch = zip(*batch)
     return pad_sequence(

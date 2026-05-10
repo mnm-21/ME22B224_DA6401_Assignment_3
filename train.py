@@ -3,7 +3,7 @@ import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Optional
+from typing import Optional, Dict, Any
 from tqdm import tqdm
 from model import (
     Transformer,
@@ -19,14 +19,14 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 class LabelSmoothingLoss(nn.Module):
     """Loss function with label smoothing to prevent overconfidence."""
 
-    def __init__(self, vocab_size, pad_idx, smoothing=0.1):
+    def __init__(self, vocab_size: int, pad_idx: int, smoothing: float = 0.1):
         super().__init__()
         self.vocab_size = vocab_size
         self.pad_idx = pad_idx
         self.smoothing = smoothing
         self.confidence = 1.0 - smoothing
 
-    def forward(self, logits, target):
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         log_probs = torch.log_softmax(logits, dim=-1)
         smooth_val = self.smoothing / (self.vocab_size - 2)
         smooth_dist = torch.full_like(log_probs, smooth_val)
@@ -41,15 +41,15 @@ class LabelSmoothingLoss(nn.Module):
 
 
 def run_epoch(
-    data_iter,
-    model,
-    loss_fn,
-    optimizer=None,
-    scheduler=None,
-    epoch_num=0,
-    is_train=True,
-    device="cpu",
-):
+    data_iter: DataLoader,
+    model: Transformer,
+    loss_fn: nn.Module,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Any = None,
+    epoch_num: int = 0,
+    is_train: bool = True,
+    device: str = "cpu",
+) -> float:
     """Handles one full pass over the dataset for training or evaluation."""
     model.train() if is_train else model.eval()
     total_loss, n_batches = 0.0, 0
@@ -72,7 +72,7 @@ def run_epoch(
                 tgt_out.contiguous().view(-1),
             )
 
-            if is_train:
+            if is_train and optimizer is not None:
                 optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -87,8 +87,14 @@ def run_epoch(
 
 
 def greedy_decode(
-    model, src, src_mask, max_len, start_symbol, end_symbol, device="cpu"
-):
+    model: Transformer,
+    src: torch.Tensor,
+    src_mask: torch.Tensor,
+    max_len: int,
+    start_symbol: int,
+    end_symbol: int,
+    device: str = "cpu",
+) -> torch.Tensor:
     """Translate one sentence by picking the most likely token at each step."""
     model.eval()
     with torch.no_grad():
@@ -104,7 +110,13 @@ def greedy_decode(
     return ys
 
 
-def evaluate_bleu(model, test_dataloader, tgt_vocab, device="cpu", max_len=100):
+def evaluate_bleu(
+    model: Transformer,
+    test_dataloader: DataLoader,
+    tgt_vocab: Dict[str, int],
+    device: str = "cpu",
+    max_len: int = 100,
+) -> float:
     """Calculate BLEU score for the model on the test set."""
     from evaluate import load as load_metric
 
@@ -144,7 +156,13 @@ def evaluate_bleu(model, test_dataloader, tgt_vocab, device="cpu", max_len=100):
     return result["bleu"] * 100
 
 
-def save_checkpoint(model, optimizer, scheduler, epoch, path="checkpoint.pt"):
+def save_checkpoint(
+    model: Transformer,
+    optimizer: torch.optim.Optimizer,
+    scheduler: Any,
+    epoch: int,
+    path: str = "checkpoint.pt",
+) -> None:
     """Save model and training state to disk."""
     torch.save(
         {
@@ -158,7 +176,12 @@ def save_checkpoint(model, optimizer, scheduler, epoch, path="checkpoint.pt"):
     )
 
 
-def load_checkpoint(path, model, optimizer=None, scheduler=None):
+def load_checkpoint(
+    path: str,
+    model: Transformer,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Any = None,
+) -> int:
     """Restore model and training state from a saved file."""
     ckpt = torch.load(path, map_location="cpu")
     model.load_state_dict(ckpt["model_state_dict"])
@@ -169,7 +192,7 @@ def load_checkpoint(path, model, optimizer=None, scheduler=None):
     return ckpt["epoch"]
 
 
-def run_training_experiment():
+def run_training_experiment() -> None:
     """Main function to run the full training process."""
     import wandb
     from dataset import Multi30kDataset, collate_fn, PAD_IDX
