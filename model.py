@@ -12,7 +12,7 @@ import torch.nn.functional as F
 _DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_VOCAB_PATH = os.path.join(_DIR, "src_vocab.json")
 TGT_VOCAB_PATH = os.path.join(_DIR, "tgt_vocab.json")
-GDRIVE_FILE_ID = "<your_gdrive_file_id>"
+GDRIVE_FILE_ID = "1nmy44qKX-SN7m5H4eSpGyi7Go4jV7FQ8"
 CHECKPOINT_LOCAL = os.path.join(_DIR, "best_checkpoint.pt")
 
 
