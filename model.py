@@ -368,8 +368,8 @@ class Transformer(nn.Module):
 
         return ys[0].tolist()
 
-    def infer(self, src_sentence: str, beam_size: int = 3) -> str:
-        """End-to-end inference from string."""
+    def infer(self, src_sentence: str) -> str:
+        """End-to-end German -> English translation using greedy decoding."""
         self.eval()
         device = next(self.parameters()).device
         tokens = [tok.text.lower() for tok in self.src_tokenizer(src_sentence)]
@@ -382,17 +382,25 @@ class Transformer(nn.Module):
         src_t = torch.tensor([src_ids], dtype=torch.long, device=device)
         src_mask = make_src_mask(src_t, self.pad_idx)
 
+        tgt_sos = self.tgt_vocab.get("<sos>", 2)
+        tgt_eos = self.tgt_vocab.get("<eos>", 3)
+        idx2tok = {v: k for k, v in self.tgt_vocab.items()}
+        max_len = src_t.size(1) + 50
+
         with torch.no_grad():
             memory = self.encode(src_t, src_mask)
-            res_ids = self.beam_decode(memory, src_mask, beam_size)
+            ys = torch.tensor([[tgt_sos]], dtype=torch.long, device=device)
+            for _ in range(max_len):
+                tgt_mask = make_tgt_mask(ys, self.pad_idx)
+                logits = self.decode(memory, src_mask, ys, tgt_mask)
+                nxt = logits[:, -1, :].argmax(dim=-1, keepdim=True)
+                ys = torch.cat([ys, nxt], dim=1)
+                if nxt.item() == tgt_eos:
+                    break
 
-        idx2tok = {v: k for k, v in self.tgt_vocab.items()}
-        tgt_sos, tgt_eos = self.tgt_vocab.get("<sos>", 2), self.tgt_vocab.get(
-            "<eos>", 3
-        )
         words = [
             idx2tok.get(idx, "<unk>")
-            for idx in res_ids
+            for idx in ys.squeeze(0).tolist()
             if idx not in (tgt_sos, tgt_eos)
         ]
         return " ".join(words)
