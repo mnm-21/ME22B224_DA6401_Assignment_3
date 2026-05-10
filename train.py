@@ -17,8 +17,6 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class LabelSmoothingLoss(nn.Module):
-    """Loss function with label smoothing to prevent overconfidence."""
-
     def __init__(self, vocab_size: int, pad_idx: int, smoothing: float = 0.1):
         super().__init__()
         self.vocab_size = vocab_size
@@ -32,8 +30,6 @@ class LabelSmoothingLoss(nn.Module):
         smooth_dist = torch.full_like(log_probs, smooth_val)
         smooth_dist[:, self.pad_idx] = 0.0
         smooth_dist.scatter_(1, target.unsqueeze(1), self.confidence)
-
-        # Mask out padding from loss calculation
         pad_mask = target == self.pad_idx
         smooth_dist[pad_mask] = 0.0
         loss = -(smooth_dist * log_probs).sum(dim=-1)
@@ -50,7 +46,6 @@ def run_epoch(
     is_train: bool = True,
     device: str = "cpu",
 ) -> float:
-    """Handles one full pass over the dataset for training or evaluation."""
     model.train() if is_train else model.eval()
     total_loss, n_batches = 0.0, 0
 
@@ -59,10 +54,8 @@ def run_epoch(
             data_iter, desc=f"{'Train' if is_train else 'Val'} Ep{epoch_num}"
         ):
             src, tgt = src.to(device), tgt.to(device)
-            # Use teacher forcing
             tgt_in = tgt[:, :-1]
             tgt_out = tgt[:, 1:]
-
             src_mask = make_src_mask(src, model.pad_idx)
             tgt_mask = make_tgt_mask(tgt_in, model.pad_idx)
 
@@ -86,39 +79,17 @@ def run_epoch(
     return total_loss / max(n_batches, 1)
 
 
-def greedy_decode(
-    model: Transformer,
-    src: torch.Tensor,
-    src_mask: torch.Tensor,
-    max_len: int,
-    start_symbol: int,
-    end_symbol: int,
-    device: str = "cpu",
-) -> torch.Tensor:
-    """Translate one sentence by picking the most likely token at each step."""
-    model.eval()
-    with torch.no_grad():
-        memory = model.encode(src, src_mask)
-        ys = torch.tensor([[start_symbol]], dtype=torch.long, device=device)
-        for _ in range(max_len - 1):
-            tgt_mask = make_tgt_mask(ys, model.pad_idx)
-            logits = model.decode(memory, src_mask, ys, tgt_mask)
-            nxt = logits[:, -1, :].argmax(dim=-1, keepdim=True)
-            ys = torch.cat([ys, nxt], dim=1)
-            if nxt.item() == end_symbol:
-                break
-    return ys
-
-
 def evaluate_bleu(
     model: Transformer,
     test_dataloader: DataLoader,
     tgt_vocab: Dict[str, int],
     device: str = "cpu",
     max_len: int = 100,
+    beam_size: int = 5,
 ) -> float:
-    """Calculate BLEU score for the model on the test set."""
+    """Calculate BLEU score using Beam Search for better quality."""
     from evaluate import load as load_metric
+    import spacy
 
     bleu_metric = load_metric("bleu")
     idx2tok = {v: k for k, v in tgt_vocab.items()}
@@ -130,26 +101,35 @@ def evaluate_bleu(
 
     predictions, references = [], []
     model.eval()
+
+    # We use a smaller subset or batching for BLEU as Beam Search is slower
     with torch.no_grad():
-        for src, tgt in test_dataloader:
+        for src, tgt in tqdm(test_dataloader, desc="Evaluating BLEU (Beam Search)"):
             src = src.to(device)
             for i in range(src.size(0)):
-                s = src[i].unsqueeze(0)
-                smask = make_src_mask(s, pad)
-                out = greedy_decode(model, s, smask, max_len, sos, eos, device)
-
-                # Convert token IDs back to strings
-                pred = [
-                    idx2tok.get(id_, "<unk>")
-                    for id_ in out.squeeze(0).tolist()
-                    if id_ not in (sos, eos, pad)
+                # Convert src tensor back to string to use model.infer (which has beam search)
+                src_tokens = [
+                    model.src_vocab.get(id_.item(), "<unk>")
+                    for id_ in src[i]
+                    if id_.item() not in (2, 3, 1)
                 ]
+                src_sentence = " ".join(
+                    [
+                        k
+                        for k, v in model.src_vocab.items()
+                        if v in src[i] and v not in (2, 3, 1)
+                    ]
+                )
+
+                # Use beam search inference
+                pred_str = model.infer(src_sentence, beam_size=beam_size)
+
                 ref = [
                     idx2tok.get(id_, "<unk>")
                     for id_ in tgt[i].tolist()
                     if id_ not in (sos, eos, pad)
                 ]
-                predictions.append(" ".join(pred))
+                predictions.append(pred_str)
                 references.append([" ".join(ref)])
 
     result = bleu_metric.compute(predictions=predictions, references=references)
@@ -163,7 +143,6 @@ def save_checkpoint(
     epoch: int,
     path: str = "checkpoint.pt",
 ) -> None:
-    """Save model and training state to disk."""
     torch.save(
         {
             "epoch": epoch,
@@ -182,7 +161,6 @@ def load_checkpoint(
     optimizer: Optional[torch.optim.Optimizer] = None,
     scheduler: Any = None,
 ) -> int:
-    """Restore model and training state from a saved file."""
     ckpt = torch.load(path, map_location="cpu")
     model.load_state_dict(ckpt["model_state_dict"])
     if optimizer and "optimizer_state_dict" in ckpt:
@@ -193,7 +171,6 @@ def load_checkpoint(
 
 
 def run_training_experiment() -> None:
-    """Main function to run the full training process."""
     import wandb
     from dataset import Multi30kDataset, collate_fn, PAD_IDX
     from lr_scheduler import NoamScheduler
@@ -206,20 +183,20 @@ def run_training_experiment() -> None:
         device = "cpu"
 
     print(f"Using device: {device}")
+    # TUNED HYPERPARAMS: Reduced warmup, increased dropout
     cfg = dict(
         d_model=512,
         N=6,
         num_heads=8,
         d_ff=2048,
-        dropout=0.1,
-        warmup_steps=4000,
+        dropout=0.2,
+        warmup_steps=2000,
         num_epochs=30,
         batch_size=128,
         smoothing=0.1,
     )
     wandb.init(project="da6401-a3", config=cfg)
 
-    # Initialize datasets and save vocabs for future inference
     train_ds = Multi30kDataset(split="train")
     val_ds = Multi30kDataset(
         split="validation", src_vocab=train_ds.src_vocab, tgt_vocab=train_ds.tgt_vocab
@@ -259,6 +236,7 @@ def run_training_experiment() -> None:
         num_heads=cfg["num_heads"],
         d_ff=cfg["d_ff"],
         dropout=cfg["dropout"],
+        tie_weights=True,
     ).to(device)
 
     optimizer = torch.optim.Adam(
@@ -291,9 +269,7 @@ def run_training_experiment() -> None:
                 "lr": optimizer.param_groups[0]["lr"],
             }
         )
-        print(
-            f"Epoch {epoch:02d} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
-        )
+        print(f"Epoch {epoch:02d} | Train: {train_loss:.4f} | Val: {val_loss:.4f}")
 
         save_checkpoint(model, optimizer, scheduler, epoch, last_ckpt)
         if val_loss < best_val_loss:
@@ -301,11 +277,11 @@ def run_training_experiment() -> None:
             save_checkpoint(model, optimizer, scheduler, epoch, best_ckpt)
             print(f"  ✓ New best model saved")
 
-    # Load best weights and evaluate on test set
     load_checkpoint(best_ckpt, model)
-    bleu = evaluate_bleu(model, test_loader, train_ds.tgt_vocab, device)
+    # Evaluate with Beam Search for final score
+    bleu = evaluate_bleu(model, test_loader, train_ds.tgt_vocab, device, beam_size=5)
     wandb.log({"test_bleu": bleu})
-    print(f"Final Test BLEU: {bleu:.2f}")
+    print(f"Final Test BLEU (Beam Search): {bleu:.2f}")
     wandb.finish()
 
 

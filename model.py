@@ -3,7 +3,7 @@ import copy
 import os
 import json
 import gdown
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,7 +12,7 @@ import torch.nn.functional as F
 _DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_VOCAB_PATH = os.path.join(_DIR, "src_vocab.json")
 TGT_VOCAB_PATH = os.path.join(_DIR, "tgt_vocab.json")
-GDRIVE_FILE_ID = "1nmy44qKX-SN7m5H4eSpGyi7Go4jV7FQ8"
+GDRIVE_FILE_ID = "1m_Vou7_VPi0w9Z4TFFf1gXMj53SkrAaJ"
 CHECKPOINT_LOCAL = os.path.join(_DIR, "best_checkpoint.pt")
 
 
@@ -222,8 +222,8 @@ class Transformer(nn.Module):
         tgt_vocab_path: str = TGT_VOCAB_PATH,
         checkpoint_path: str = CHECKPOINT_LOCAL,
         gdrive_file_id: str = GDRIVE_FILE_ID,
+        tie_weights: bool = True,
     ):
-        # Load vocab from disk if it exists (written by training pipeline)
         if os.path.exists(src_vocab_path):
             with open(src_vocab_path, "r") as f:
                 src_vocab = json.load(f)
@@ -258,6 +258,10 @@ class Transformer(nn.Module):
         self.decoder = Decoder(DecoderLayer(d_model, num_heads, d_ff, dropout), N)
         self.output_proj = nn.Linear(d_model, tgt_vocab_size)
 
+        # Weight Tying (Paper Section 3.4)
+        if tie_weights:
+            self.output_proj.weight = self.tgt_embed.weight
+
         self._init_parameters()
         self.src_vocab = src_vocab
         self.tgt_vocab = tgt_vocab
@@ -277,8 +281,7 @@ class Transformer(nn.Module):
         self.src_tokenizer = _load_spacy("de_core_news_sm")
         self.tgt_tokenizer = _load_spacy("en_core_web_sm")
 
-        # Download and load weights if a GDrive ID is provided
-        if gdrive_file_id and gdrive_file_id != "<your_gdrive_file_id>":
+        if gdrive_file_id and gdrive_file_id != "gdrive_file_id>":
             if not os.path.exists(checkpoint_path):
                 gdown.download(id=gdrive_file_id, output=checkpoint_path, quiet=False)
             if os.path.exists(checkpoint_path):
@@ -314,15 +317,47 @@ class Transformer(nn.Module):
     ) -> torch.Tensor:
         return self.decode(self.encode(src, src_mask), src_mask, tgt, tgt_mask)
 
-    def infer(self, src_sentence: str) -> str:
-        """End-to-end German -> English translation for evaluation."""
-        assert self.src_vocab is not None, "src_vocab not loaded"
-        assert self.tgt_vocab is not None, "tgt_vocab not loaded"
+    def beam_decode(
+        self,
+        memory: torch.Tensor,
+        src_mask: torch.Tensor,
+        beam_size: int = 5,
+        max_len: int = 100,
+    ) -> List[int]:
+        """Fast beam search that works directly on tensors."""
+        device = memory.device
+        tgt_sos, tgt_eos = self.tgt_vocab.get("<sos>", 2), self.tgt_vocab.get(
+            "<eos>", 3
+        )
 
+        beams = [([tgt_sos], 0.0)]
+        for _ in range(max_len):
+            new_beams = []
+            for seq, score in beams:
+                if seq[-1] == tgt_eos:
+                    new_beams.append((seq, score))
+                    continue
+
+                tgt_t = torch.tensor([seq], dtype=torch.long, device=device)
+                tgt_mask = make_tgt_mask(tgt_t, self.pad_idx)
+                logits = self.decode(memory, src_mask, tgt_t, tgt_mask)
+                log_probs = F.log_softmax(logits[:, -1, :], dim=-1)
+
+                top_probs, top_ids = log_probs.topk(beam_size)
+                for i in range(beam_size):
+                    new_beams.append(
+                        (seq + [top_ids[0, i].item()], score + top_probs[0, i].item())
+                    )
+
+            beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_size]
+            if all(b[0][-1] == tgt_eos for b in beams):
+                break
+        return beams[0][0]
+
+    def infer(self, src_sentence: str, beam_size: int = 5) -> str:
+        """End-to-end inference from string."""
         self.eval()
         device = next(self.parameters()).device
-
-        # Tokenize and encode input
         tokens = [tok.text.lower() for tok in self.src_tokenizer(src_sentence)]
         unk, sos, eos = (
             self.src_vocab.get("<unk>", 0),
@@ -331,32 +366,19 @@ class Transformer(nn.Module):
         )
         src_ids = [sos] + [self.src_vocab.get(t, unk) for t in tokens] + [eos]
         src_t = torch.tensor([src_ids], dtype=torch.long, device=device)
-
         src_mask = make_src_mask(src_t, self.pad_idx)
-        memory = self.encode(src_t, src_mask)
 
-        # Greedy decoding
+        with torch.no_grad():
+            memory = self.encode(src_t, src_mask)
+            res_ids = self.beam_decode(memory, src_mask, beam_size)
+
+        idx2tok = {v: k for k, v in self.tgt_vocab.items()}
         tgt_sos, tgt_eos = self.tgt_vocab.get("<sos>", 2), self.tgt_vocab.get(
             "<eos>", 3
         )
-        idx2tok = {v: k for k, v in self.tgt_vocab.items()}
-        ys = torch.tensor([[tgt_sos]], dtype=torch.long, device=device)
-        max_len = src_t.size(1) + 50
-
-        with torch.no_grad():
-            for _ in range(max_len):
-                tgt_mask = make_tgt_mask(ys, self.pad_idx)
-                logits = self.decode(memory, src_mask, ys, tgt_mask)
-                nxt = logits[:, -1, :].argmax(dim=-1, keepdim=True)
-                ys = torch.cat([ys, nxt], dim=1)
-                if nxt.item() == tgt_eos:
-                    break
-
-        words = []
-        for idx in ys.squeeze(0).tolist():
-            if idx == tgt_sos:
-                continue
-            if idx == tgt_eos:
-                break
-            words.append(idx2tok.get(idx, "<unk>"))
+        words = [
+            idx2tok.get(idx, "<unk>")
+            for idx in res_ids
+            if idx not in (tgt_sos, tgt_eos)
+        ]
         return " ".join(words)
