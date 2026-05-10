@@ -239,15 +239,19 @@ class Transformer(nn.Module):
         self.src_vocab = src_vocab
         self.tgt_vocab = tgt_vocab
 
-        # Try to load spacy tokenizers for inference
-        try:
-            import spacy
+        # Load spacy tokenizers, downloading models if not already installed
+        import spacy
 
-            self.src_tokenizer = spacy.load("de_core_news_sm")
-            self.tgt_tokenizer = spacy.load("en_core_web_sm")
-        except Exception:
-            self.src_tokenizer = None
-            self.tgt_tokenizer = None
+        def _load_spacy(model_name):
+            try:
+                return spacy.load(model_name)
+            except OSError:
+                from spacy.cli import download
+                download(model_name)
+                return spacy.load(model_name)
+
+        self.src_tokenizer = _load_spacy("de_core_news_sm")
+        self.tgt_tokenizer = _load_spacy("en_core_web_sm")
 
         # Download and load weights if a GDrive ID is provided
         if gdrive_file_id and gdrive_file_id != "<your_gdrive_file_id>":
