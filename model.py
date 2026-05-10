@@ -334,9 +334,9 @@ class Transformer(nn.Module):
         ys = torch.full((1, 1), tgt_sos, dtype=torch.long, device=device)
         scores = torch.zeros(1, device=device)
 
-        # Expand memory to beam size
+        # Expand memory and mask to beam size (src_mask is 4D: [1,1,1,src_len])
         memory = memory.repeat(beam_size, 1, 1)
-        src_mask = src_mask.repeat(beam_size, 1, 1)
+        src_mask = src_mask.repeat(beam_size, 1, 1, 1)
 
         for _ in range(max_len):
             curr_beam_size = ys.size(0)
