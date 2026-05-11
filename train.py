@@ -102,7 +102,7 @@ def evaluate_bleu(
     predictions, references = [], []
     model.eval()
 
-    # We use a smaller subset or batching for BLEU evaluation
+    # using a smaller subset or batching for BLEU evaluation
     with torch.no_grad():
         for src, tgt in tqdm(test_dataloader, desc="Evaluating BLEU (Greedy)"):
             src = src.to(device)
@@ -178,7 +178,7 @@ def run_training_experiment() -> None:
         device = "cpu"
 
     print(f"Using device: {device}")
-    # TUNED HYPERPARAMS: Reduced warmup, increased dropout
+
     cfg = dict(
         d_model=512,
         N=6,
@@ -258,7 +258,7 @@ def run_training_experiment() -> None:
             val_loader, model, loss_fn, None, None, epoch, False, device
         )
         
-        # Evaluate validation BLEU using greedy decoding for speed
+        # Evaluating validation BLEU using greedy decoding for speed
         val_bleu = evaluate_bleu(model, val_loader, train_ds.tgt_vocab, device)
 
         wandb.log(
@@ -279,7 +279,7 @@ def run_training_experiment() -> None:
             print(f"  ✓ New best model saved (BLEU: {val_bleu:.2f})")
 
     load_checkpoint(best_ckpt, model)
-    # Evaluate with Greedy Decoding for final score
+    # Evaluating test BLEU using greedy decoding for speed
     bleu = evaluate_bleu(model, test_loader, train_ds.tgt_vocab, device)
     wandb.log({"test_bleu": bleu})
     print(f"Final Test BLEU (Greedy): {bleu:.2f}")
