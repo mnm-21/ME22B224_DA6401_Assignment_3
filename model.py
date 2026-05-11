@@ -12,9 +12,8 @@ import torch.nn.functional as F
 _DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_VOCAB_PATH = os.path.join(_DIR, "src_vocab.json")
 TGT_VOCAB_PATH = os.path.join(_DIR, "tgt_vocab.json")
-GDRIVE_FILE_ID = "1m_Vou7_VPi0w9Z4TFFf1gXMj53SkrAaJ"
+GDRIVE_FILE_ID = "16dJvfinfFXW-gY5WmHaMgn7Tu3HCaZsv"
 CHECKPOINT_LOCAL = os.path.join(_DIR, "best_checkpoint.pt")
-
 
 def scaled_dot_product_attention(
     Q: torch.Tensor,
