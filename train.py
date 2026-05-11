@@ -85,14 +85,14 @@ def evaluate_bleu(
     tgt_vocab: Dict[str, int],
     device: str = "cpu",
     max_len: int = 100,
-    beam_size: int = 5,
 ) -> float:
-    """Calculate BLEU score using Beam Search for better quality."""
+    """Calculate BLEU score using Greedy Decoding."""
     from evaluate import load as load_metric
     import spacy
 
     bleu_metric = load_metric("bleu")
     idx2tok = {v: k for k, v in tgt_vocab.items()}
+    src_idx2tok = {v: k for k, v in model.src_vocab.items()}
     sos, eos, pad = (
         tgt_vocab.get("<sos>", 2),
         tgt_vocab.get("<eos>", 3),
@@ -102,27 +102,22 @@ def evaluate_bleu(
     predictions, references = [], []
     model.eval()
 
-    # We use a smaller subset or batching for BLEU as Beam Search is slower
+    # We use a smaller subset or batching for BLEU evaluation
     with torch.no_grad():
-        for src, tgt in tqdm(test_dataloader, desc="Evaluating BLEU (Beam Search)"):
+        for src, tgt in tqdm(test_dataloader, desc="Evaluating BLEU (Greedy)"):
             src = src.to(device)
             for i in range(src.size(0)):
-                # Convert src tensor back to string to use model.infer (which has beam search)
-                src_tokens = [
-                    model.src_vocab.get(id_.item(), "<unk>")
-                    for id_ in src[i]
-                    if id_.item() not in (2, 3, 1)
-                ]
+                # Convert src tensor back to string correctly and quickly
                 src_sentence = " ".join(
                     [
-                        k
-                        for k, v in model.src_vocab.items()
-                        if v in src[i] and v not in (2, 3, 1)
+                        src_idx2tok.get(id_.item(), "<unk>")
+                        for id_ in src[i]
+                        if id_.item() not in (sos, eos, pad)
                     ]
                 )
 
-                # Use beam search inference
-                pred_str = model.infer(src_sentence, beam_size=beam_size)
+                # Use inference
+                pred_str = model.infer(src_sentence)
 
                 ref = [
                     idx2tok.get(id_, "<unk>")
@@ -189,8 +184,8 @@ def run_training_experiment() -> None:
         N=6,
         num_heads=8,
         d_ff=2048,
-        dropout=0.2,
-        warmup_steps=2000,
+        dropout=0.1,
+        warmup_steps=4000,
         num_epochs=30,
         batch_size=128,
         smoothing=0.1,
@@ -209,6 +204,7 @@ def run_training_experiment() -> None:
         json.dump(train_ds.src_vocab, f)
     with open(TGT_VOCAB_PATH, "w") as f:
         json.dump(train_ds.tgt_vocab, f)
+    print(f"Vocab sizes: src={len(train_ds.src_vocab)}, tgt={len(train_ds.tgt_vocab)}")
 
     train_loader = DataLoader(
         train_ds,
@@ -237,6 +233,7 @@ def run_training_experiment() -> None:
         d_ff=cfg["d_ff"],
         dropout=cfg["dropout"],
         tie_weights=True,
+        gdrive_file_id=None,
     ).to(device)
 
     optimizer = torch.optim.Adam(
@@ -249,7 +246,7 @@ def run_training_experiment() -> None:
         len(train_ds.tgt_vocab), pad_idx=PAD_IDX, smoothing=cfg["smoothing"]
     )
 
-    best_val_loss = float("inf")
+    best_val_bleu = -1.0
     best_ckpt = os.path.join(_DIR, "best_checkpoint.pt")
     last_ckpt = os.path.join(_DIR, "checkpoint.pt")
 
@@ -260,28 +257,32 @@ def run_training_experiment() -> None:
         val_loss = run_epoch(
             val_loader, model, loss_fn, None, None, epoch, False, device
         )
+        
+        # Evaluate validation BLEU using greedy decoding for speed
+        val_bleu = evaluate_bleu(model, val_loader, train_ds.tgt_vocab, device)
 
         wandb.log(
             {
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "val_loss": val_loss,
+                "val_bleu": val_bleu,
                 "lr": optimizer.param_groups[0]["lr"],
             }
         )
-        print(f"Epoch {epoch:02d} | Train: {train_loss:.4f} | Val: {val_loss:.4f}")
+        print(f"Epoch {epoch:02d} | Train: {train_loss:.4f} | Val: {val_loss:.4f} | Val BLEU: {val_bleu:.2f}")
 
         save_checkpoint(model, optimizer, scheduler, epoch, last_ckpt)
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_bleu > best_val_bleu:
+            best_val_bleu = val_bleu
             save_checkpoint(model, optimizer, scheduler, epoch, best_ckpt)
-            print(f"  ✓ New best model saved")
+            print(f"  ✓ New best model saved (BLEU: {val_bleu:.2f})")
 
     load_checkpoint(best_ckpt, model)
-    # Evaluate with Beam Search for final score
-    bleu = evaluate_bleu(model, test_loader, train_ds.tgt_vocab, device, beam_size=5)
+    # Evaluate with Greedy Decoding for final score
+    bleu = evaluate_bleu(model, test_loader, train_ds.tgt_vocab, device)
     wandb.log({"test_bleu": bleu})
-    print(f"Final Test BLEU (Beam Search): {bleu:.2f}")
+    print(f"Final Test BLEU (Greedy): {bleu:.2f}")
     wandb.finish()
 
 
