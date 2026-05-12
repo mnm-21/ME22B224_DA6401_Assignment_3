@@ -46,8 +46,12 @@ def run_epoch(
     is_train: bool = True,
     device: str = "cpu",
 ) -> float:
-    model.train() if is_train else model.eval()
-    total_loss, n_batches = 0.0, 0
+    if is_train:
+        model.train()
+    else:
+        model.eval()
+    total_loss = 0.0
+    num_batches = 0
 
     with torch.set_grad_enabled(is_train):
         for src, tgt in tqdm(
@@ -74,9 +78,9 @@ def run_epoch(
                     scheduler.step()
 
             total_loss += loss.item()
-            n_batches += 1
+            num_batches += 1
 
-    return total_loss / max(n_batches, 1)
+    return total_loss / max(num_batches, 1)
 
 
 def evaluate_bleu(
@@ -93,11 +97,9 @@ def evaluate_bleu(
     bleu_metric = load_metric("bleu")
     idx2tok = {v: k for k, v in tgt_vocab.items()}
     src_idx2tok = {v: k for k, v in model.src_vocab.items()}
-    sos, eos, pad = (
-        tgt_vocab.get("<sos>", 2),
-        tgt_vocab.get("<eos>", 3),
-        tgt_vocab.get("<pad>", 1),
-    )
+    sos = tgt_vocab.get("<sos>", 2)
+    eos = tgt_vocab.get("<eos>", 3)
+    pad = tgt_vocab.get("<pad>", 1)
 
     predictions, references = [], []
     model.eval()

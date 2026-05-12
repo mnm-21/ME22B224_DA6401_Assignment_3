@@ -1,4 +1,4 @@
-# DA6401 Assignment 3 — Transformer NMT
+# DA6401 Assignment 3 ME22B224 — Transformer NMT
 
 Implementation of the Transformer architecture ("Attention Is All You Need") for Neural Machine Translation from German to English using the Multi30k dataset.
 

@@ -19,8 +19,8 @@ class Multi30kDataset(Dataset):
         tgt_vocab: Optional[Dict[str, int]] = None,
     ):
         self.split = split
-        ds = load_dataset("bentrevett/multi30k")
-        self.data = ds[split]
+        dataset = load_dataset("bentrevett/multi30k")
+        self.data = dataset[split]
 
         self.src_tokenizer = spacy.load("de_core_news_sm")
         self.tgt_tokenizer = spacy.load("en_core_web_sm")
